@@ -1,0 +1,81 @@
+spring:
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_SERVER_ADDR:nacos:8848}
+        username: nacos
+        password: nacos
+        metadata:
+          gray: false
+    sentinel:
+      transport:
+        port: 8768
+        dashboard: sentinel:8080
+    gateway:
+      enabled: true
+      discovery:
+        locator:
+          enabled: true
+      routes:
+        - id: damai-base-data-service
+          uri: lb://damai-base-data-service
+          predicates:
+            - Path=/damai/basedata/**
+          filters:
+            - StripPrefix=2
+        - id: damai-customize-service
+          uri: lb://damai-customize-service
+          predicates:
+            - Path=/damai/customize/**
+          filters:
+            - StripPrefix=2
+        - id: damai-order-service
+          uri: lb://damai-order-service
+          predicates:
+            - Path=/damai/order/**
+          filters:
+            - StripPrefix=2
+        - id: damai-pay-service
+          uri: lb://damai-pay-service
+          predicates:
+            - Path=/damai/pay/**
+          filters:
+            - StripPrefix=2
+        - id: damai-program-service
+          uri: lb://damai-program-service
+          predicates:
+            - Path=/damai/program/**
+          filters:
+            - StripPrefix=2
+        - id: damai-user-service
+          uri: lb://damai-user-service
+          predicates:
+            - Path=/damai/user/**
+          filters:
+            - StripPrefix=2
+        - id: damai-admin-service
+          uri: lb://damai-admin-service
+          predicates:
+            - Path=/damai/admin/**
+          filters:
+            - StripPrefix=2
+  data:
+    redis:
+      host: ${REDIS_HOST:redis-master-1}
+      port: 6379
+      database: 0
+      timeout: 3000
+  kafka:
+    bootstrap-servers: ${KAFKA_SERVERS:kafka:9092}
+    producer:
+      retries: 1
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    topic: save_api_data
+
+logging:
+  level:
+    com.damai: INFO
+    org.springframework.cloud.gateway: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{50} - %msg%n"

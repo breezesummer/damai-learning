@@ -1,0 +1,404 @@
+version: '3.8'
+
+services:
+  # ====================
+  # 基础设施服务
+  # ====================
+  
+  # MySQL主库
+  mysql-master:
+    image: mysql:8.0
+    container_name: damai-mysql-master
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_CHARSET: utf8mb4
+      MYSQL_COLLATION: utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-master-data:/var/lib/mysql
+      - ./sql/cloud:/docker-entrypoint-initdb.d
+      - ./docker/mysql/master.cnf:/etc/mysql/conf.d/master.cnf
+    command: --default-authentication-plugin=mysql_native_password
+    networks:
+      - damai-network
+    restart: unless-stopped
+
+  # MySQL从库
+  mysql-slave:
+    image: mysql:8.0
+    container_name: damai-mysql-slave
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_CHARSET: utf8mb4
+      MYSQL_COLLATION: utf8mb4_unicode_ci
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql-slave-data:/var/lib/mysql
+      - ./docker/mysql/slave.cnf:/etc/mysql/conf.d/slave.cnf
+    command: --default-authentication-plugin=mysql_native_password
+    depends_on:
+      - mysql-master
+    networks:
+      - damai-network
+    restart: unless-stopped
+
+  # Redis集群 - 主节点1
+  redis-master-1:
+    image: redis:7-alpine
+    container_name: damai-redis-master-1
+    ports:
+      - "6379:6379"
+      - "16379:16379"
+    volumes:
+      - redis-1-data:/data
+      - ./docker/redis/redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes --port 6379 --cluster-announce-port 6379 --cluster-announce-bus-port 16379
+    networks:
+      - damai-network
+    restart: unless-stopped
+
+  # Redis集群 - 主节点2
+  redis-master-2:
+    image: redis:7-alpine
+    container_name: damai-redis-master-2
+    ports:
+      - "6380:6380"
+      - "16380:16380"
+    volumes:
+      - redis-2-data:/data
+      - ./docker/redis/redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes --port 6380 --cluster-announce-port 6380 --cluster-announce-bus-port 16380
+    networks:
+      - damai-network
+    restart: unless-stopped
+
+  # Redis集群 - 主节点3
+  redis-master-3:
+    image: redis:7-alpine
+    container_name: damai-redis-master-3
+    ports:
+      - "6381:6381"
+      - "16381:16381"
+    volumes:
+      - redis-3-data:/data
+      - ./docker/redis/redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes --port 6381 --cluster-announce-port 6381 --cluster-announce-bus-port 16381
+    networks:
+      - damai-network
+    restart: unless-stopped
+
+  # Nacos
+  nacos:
+    image: nacos/nacos-server:v2.0.3
+    container_name: damai-nacos
+    environment:
+      - MODE=standalone
+      - SPRING_DATASOURCE_PLATFORM=mysql
+      - MYSQL_SERVICE_HOST=mysql-master
+      - MYSQL_SERVICE_PORT=3306
+      - MYSQL_SERVICE_DB_NAME=nacos
+      - MYSQL_SERVICE_USER=root
+      - MYSQL_SERVICE_PASSWORD=root
+      - MYSQL_SERVICE_DB_PARAM=characterEncoding=utf8&connectTimeout=1000&socketTimeout=3000&autoReconnect=true&useSSL=false&allowPublicKeyRetrieval=true
+    ports:
+      - "8848:8848"
+      - "9848:9848"
+    volumes:
+      - nacos-data:/home/nacos/data
+      - nacos-logs:/home/nacos/logs
+    depends_on:
+      - mysql-master
+    networks:
+      - damai-network
+    restart: unless-stopped
+
+  # Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: damai-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-logs:/var/lib/zookeeper/log
+    networks:
+      - damai-network
+    restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: damai-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: true
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      - damai-network
+    restart: unless-stopped
+
+  # Elasticsearch
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.9.0
+    container_name: damai-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - damai-network
+    restart: unless-stopped
+
+  # Sentinel控制台
+  sentinel:
+    image: bladex/sentinel-dashboard:1.8.6
+    container_name: damai-sentinel
+    ports:
+      - "8082:8080"
+    environment:
+      - JVM_OPTS=-Dserver.port=8080 -Dcsp.sentinel.dashboard.server=localhost:8080 -Dproject.name=sentinel-dashboard
+    networks:
+      - damai-network
+    restart: unless-stopped
+
+  # ====================
+  # 应用服务
+  # ====================
+
+  # 网关服务
+  gateway-service:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      args:
+        JAR_FILE: damai-server/damai-gateway-service/target/damai-gateway-service-*.jar
+    container_name: damai-gateway-service
+    ports:
+      - "6085:6085"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - NACOS_SERVER_ADDR=nacos:8848
+      - REDIS_HOST=redis-master-1
+      - MYSQL_HOST=mysql-master
+    depends_on:
+      - mysql-master
+      - redis-master-1
+      - nacos
+    networks:
+      - damai-network
+    restart: unless-stopped
+
+  # 用户服务
+  user-service:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      args:
+        JAR_FILE: damai-server/damai-user-service/target/damai-user-service-*.jar
+    container_name: damai-user-service
+    ports:
+      - "6082:6082"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - NACOS_SERVER_ADDR=nacos:8848
+      - REDIS_HOST=redis-master-1
+      - MYSQL_HOST=mysql-master
+    depends_on:
+      - mysql-master
+      - redis-master-1
+      - nacos
+    networks:
+      - damai-network
+    restart: unless-stopped
+
+  # 订单服务
+  order-service:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      args:
+        JAR_FILE: damai-server/damai-order-service/target/damai-order-service-*.jar
+    container_name: damai-order-service
+    ports:
+      - "6083:6083"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - NACOS_SERVER_ADDR=nacos:8848
+      - REDIS_HOST=redis-master-1
+      - MYSQL_HOST=mysql-master
+      - KAFKA_SERVERS=kafka:9092
+    depends_on:
+      - mysql-master
+      - redis-master-1
+      - nacos
+      - kafka
+    networks:
+      - damai-network
+    restart: unless-stopped
+
+  # 支付服务
+  pay-service:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      args:
+        JAR_FILE: damai-server/damai-pay-service/target/damai-pay-service-*.jar
+    container_name: damai-pay-service
+    ports:
+      - "6084:6084"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - NACOS_SERVER_ADDR=nacos:8848
+      - REDIS_HOST=redis-master-1
+      - MYSQL_HOST=mysql-master
+    depends_on:
+      - mysql-master
+      - redis-master-1
+      - nacos
+    networks:
+      - damai-network
+    restart: unless-stopped
+
+  # 节目服务
+  program-service:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      args:
+        JAR_FILE: damai-server/damai-program-service/target/damai-program-service-*.jar
+    container_name: damai-program-service
+    ports:
+      - "6081:6081"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - NACOS_SERVER_ADDR=nacos:8848
+      - REDIS_HOST=redis-master-1
+      - MYSQL_HOST=mysql-master
+      - ELASTICSEARCH_HOST=elasticsearch:9200
+    depends_on:
+      - mysql-master
+      - redis-master-1
+      - nacos
+      - elasticsearch
+    networks:
+      - damai-network
+    restart: unless-stopped
+
+  # 基础数据服务
+  base-data-service:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      args:
+        JAR_FILE: damai-server/damai-base-data-service/target/damai-base-data-service-*.jar
+    container_name: damai-base-data-service
+    ports:
+      - "6086:6086"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - NACOS_SERVER_ADDR=nacos:8848
+      - REDIS_HOST=redis-master-1
+      - MYSQL_HOST=mysql-master
+    depends_on:
+      - mysql-master
+      - redis-master-1
+      - nacos
+    networks:
+      - damai-network
+    restart: unless-stopped
+
+  # 管理服务
+  admin-service:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      args:
+        JAR_FILE: damai-server/damai-admin-service/target/damai-admin-service-*.jar
+    container_name: damai-admin-service
+    ports:
+      - "6087:6087"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - NACOS_SERVER_ADDR=nacos:8848
+      - REDIS_HOST=redis-master-1
+      - MYSQL_HOST=mysql-master
+    depends_on:
+      - mysql-master
+      - redis-master-1
+      - nacos
+    networks:
+      - damai-network
+    restart: unless-stopped
+
+  # 定制服务
+  customize-service:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      args:
+        JAR_FILE: damai-server/damai-customize-service/target/damai-customize-service-*.jar
+    container_name: damai-customize-service
+    ports:
+      - "6088:6088"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - NACOS_SERVER_ADDR=nacos:8848
+      - REDIS_HOST=redis-master-1
+      - MYSQL_HOST=mysql-master
+    depends_on:
+      - mysql-master
+      - redis-master-1
+      - nacos
+    networks:
+      - damai-network
+    restart: unless-stopped
+
+  # 前端服务
+  frontend:
+    build:
+      context: ./vue3
+      dockerfile: ../docker/Dockerfile.frontend
+    container_name: damai-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - gateway-service
+    networks:
+      - damai-network
+    restart: unless-stopped
+
+# 网络配置
+networks:
+  damai-network:
+    driver: bridge
+
+# 数据卷配置
+volumes:
+  mysql-master-data:
+  mysql-slave-data:
+  redis-1-data:
+  redis-2-data:
+  redis-3-data:
+  nacos-data:
+  nacos-logs:
+  zookeeper-data:
+  zookeeper-logs:
+  kafka-data:
+  elasticsearch-data:
